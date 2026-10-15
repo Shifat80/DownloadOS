@@ -64,6 +64,39 @@ npm run typecheck
 cd src-tauri && cargo fmt --check && cargo clippy -- -D warnings && cargo test
 ```
 
+## Known environment constraints (this Windows machine)
+
+Two machine-specific issues were hit during setup and worked around:
+
+1. **OneDrive read-only folder attribute.** The repo lives under a
+   OneDrive-synced path, which sets the read-only attribute on directories.
+   `autocfg`-based build scripts then fail with *"output path is not a
+   writable directory."* Fixed by redirecting Cargo's target directory
+   outside OneDrive via `src-tauri/.cargo/config.toml` (git-ignored, since the
+   absolute path is machine-specific):
+
+   ```toml
+   [build]
+   target-dir = "C:/Users/<you>/AppData/Local/downloados/target"
+   ```
+
+2. **Smart App Control (SAC) is ENFORCED.** SAC blocks execution of unsigned /
+   unknown-reputation binaries. Code **compiles** fine, but freshly built
+   **binaries cannot run** — `cargo test` cannot launch its test executable
+   (os error 4551) and `npm run tauri dev` cannot launch the app. There is no
+   code-side workaround; running the app or the test suite locally requires
+   turning SAC off in Windows Security (irreversible without an OS reset) or
+   using a machine without SAC enforced. Until then, test and run status is
+   reported as "compiles; execution blocked by SAC."
+
+### Build/run must use the MSVC environment
+
+Run `cargo` from PowerShell (not Git Bash). rustc's MSVC toolchain locates
+`link.exe` and the Windows SDK via the registry once VS Build Tools (with the
+"Desktop development with C++" workload, including the Windows SDK) are
+installed. Git Bash's coreutils `link` shadows the MSVC linker, so avoid it for
+builds.
+
 ## Security configuration notes
 
 - Tauri CSP is set (not `null`) in `src-tauri/tauri.conf.json`.

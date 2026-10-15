@@ -21,3 +21,6 @@ Thumbs.db
 *.env
 .env.*
 src-tauri/*.key
+
+# Machine-local cargo target redirect (OneDrive workaround)
+src-tauri/.cargo/config.toml
