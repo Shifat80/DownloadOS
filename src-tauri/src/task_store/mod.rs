@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 pub use state::TaskState;
 
 /// Current schema version. Bump when adding a migration step.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// How bytes are transferred. Segmented mode arrives in Phase 3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -298,6 +298,100 @@ impl TaskStore {
     }
 }
 
+/// A persisted segment checkpoint for a resumable segmented download.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SegmentRow {
+    pub idx: i64,
+    pub start_byte: i64,
+    pub end_byte: i64,
+    pub done: bool,
+}
+
+impl TaskStore {
+    /// Read a persisted setting value.
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>, StoreError> {
+        let conn = self.conn.lock().expect("task store mutex");
+        let v = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                params![key],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(v)
+    }
+
+    /// Insert or update a setting value.
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect("task store mutex");
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Replace all segment checkpoints for a task (idempotent plan write).
+    pub fn replace_segments(
+        &self,
+        task_id: &str,
+        segments: &[(i64, i64, i64)],
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn.lock().expect("task store mutex");
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM segments WHERE task_id = ?1", params![task_id])?;
+        for (idx, start, end) in segments {
+            tx.execute(
+                "INSERT INTO segments (task_id, idx, start_byte, end_byte, done)
+                 VALUES (?1, ?2, ?3, ?4, 0)",
+                params![task_id, idx, start, end],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Mark one segment as completed.
+    pub fn mark_segment_done(&self, task_id: &str, idx: i64) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect("task store mutex");
+        conn.execute(
+            "UPDATE segments SET done = 1 WHERE task_id = ?1 AND idx = ?2",
+            params![task_id, idx],
+        )?;
+        Ok(())
+    }
+
+    /// List a task's segment checkpoints, ordered by index.
+    pub fn list_segments(&self, task_id: &str) -> Result<Vec<SegmentRow>, StoreError> {
+        let conn = self.conn.lock().expect("task store mutex");
+        let mut stmt = conn.prepare(
+            "SELECT idx, start_byte, end_byte, done FROM segments
+             WHERE task_id = ?1 ORDER BY idx",
+        )?;
+        let rows = stmt.query_map(params![task_id], |r| {
+            Ok(SegmentRow {
+                idx: r.get(0)?,
+                start_byte: r.get(1)?,
+                end_byte: r.get(2)?,
+                done: r.get::<_, i64>(3)? != 0,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Delete a task's segment checkpoints.
+    pub fn clear_segments(&self, task_id: &str) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect("task store mutex");
+        conn.execute("DELETE FROM segments WHERE task_id = ?1", params![task_id])?;
+        Ok(())
+    }
+}
+
 /// Column list shared by SELECT statements, in the order `row_to_task` expects.
 const COLUMNS: &str = "id, source_url, display_url, filename, destination_path, state, \
      total_bytes, downloaded_bytes, mode, etag, last_modified, retry_count, \
@@ -353,7 +447,25 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
         )?;
     }
 
-    // Future migrations: `if version < 2 { ... }`, etc.
+    if version < 2 {
+        conn.execute_batch(
+            "CREATE TABLE settings (
+                key   TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL
+             );
+             CREATE TABLE segments (
+                task_id    TEXT NOT NULL,
+                idx        INTEGER NOT NULL,
+                start_byte INTEGER NOT NULL,
+                end_byte   INTEGER NOT NULL,
+                done       INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (task_id, idx)
+             );
+             CREATE INDEX idx_segments_task ON segments(task_id);",
+        )?;
+    }
+
+    // Future migrations: `if version < 3 { ... }`, etc.
 
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
@@ -511,6 +623,38 @@ mod tests {
             store.get("pause").unwrap().unwrap().state,
             TaskState::Paused
         );
+    }
+
+    #[test]
+    fn settings_roundtrip() {
+        let store = TaskStore::open_in_memory().unwrap();
+        assert_eq!(store.get_setting("download_dir").unwrap(), None);
+        store.set_setting("download_dir", "C:/dl").unwrap();
+        store.set_setting("download_dir", "C:/other").unwrap(); // upsert
+        assert_eq!(
+            store.get_setting("download_dir").unwrap().as_deref(),
+            Some("C:/other")
+        );
+    }
+
+    #[test]
+    fn segment_checkpoints_roundtrip() {
+        let store = TaskStore::open_in_memory().unwrap();
+        store.create(&sample("a")).unwrap();
+        store
+            .replace_segments("a", &[(0, 0, 99), (1, 100, 199), (2, 200, 255)])
+            .unwrap();
+        store.mark_segment_done("a", 1).unwrap();
+
+        let segs = store.list_segments("a").unwrap();
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[0].start_byte, 0);
+        assert_eq!(segs[0].end_byte, 99);
+        assert!(!segs[0].done);
+        assert!(segs[1].done);
+
+        store.clear_segments("a").unwrap();
+        assert!(store.list_segments("a").unwrap().is_empty());
     }
 
     #[test]

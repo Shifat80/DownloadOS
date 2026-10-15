@@ -156,10 +156,21 @@ synthetic progress:
   pause/resume/cancel/retry/remove actions, plus accessible empty and error
   states. Light/dark via `prefers-color-scheme`.
 
-Current manager scope: live downloads use the single-stream resumable path
-(supports pause/resume/cancel/retry end to end). Driving the segmented
-transfer through the live manager, a native folder picker, and auto-starting
-tasks recovered to `queued` after a crash are follow-ups.
+The live manager now uses **multi-connection segmented** downloads when the
+server verifiably supports byte ranges and the file is large enough (with a
+configurable connection count, default 4, clamped 1–16); otherwise it falls
+back to a single stream. Pause/resume/cancel/retry work for both: segmented
+downloads persist per-segment checkpoints (schema v2 `segments` table) and
+resume by re-fetching only incomplete segments. Settings (download folder and
+connection count) are persisted in the store (`settings` table) and surfaced
+via `get_settings`/`set_settings`.
+
+The browser bridge (Phase 5) is wired into startup: it binds `127.0.0.1:14900`,
+uses a persisted pairing token, and `bridge_info` exposes the port + code for
+**Settings → Browser pairing**. A valid handoff creates and starts a download
+just like the UI. Remaining follow-ups: native folder picker, auto-starting
+tasks recovered to `queued` after a crash, and speeding up the
+truncated-response test (currently gated by the read timeout).
 
 ## Security configuration notes
 

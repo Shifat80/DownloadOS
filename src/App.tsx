@@ -1,41 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
-import { api, onDownloadsChanged, onProgress } from "./api";
+import { api, onDownloadsChanged, onProgress, type BridgeInfo } from "./api";
 import { errorMessage, type DownloadTask } from "./types";
 import { AddBar } from "./components/AddBar";
 import { Settings } from "./components/Settings";
 import { Toolbar, matchesFilter, type Filter } from "./components/Toolbar";
 import { TaskCard, type LiveProgress } from "./components/TaskCard";
 
-const DEST_KEY = "downloados.destDir";
-
-function loadStoredDir(): string {
-  try {
-    return localStorage.getItem(DEST_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function storeDir(dir: string) {
-  try {
-    localStorage.setItem(DEST_KEY, dir);
-  } catch {
-    /* ignore: private mode / blocked storage */
-  }
-}
-
 export default function App() {
   const [tasks, setTasks] = useState<DownloadTask[]>([]);
-  const [destDir, setDestDir] = useState<string>(loadStoredDir());
+  const [destDir, setDestDir] = useState("");
+  const [connections, setConnections] = useState(4);
+  const [bridge, setBridge] = useState<BridgeInfo | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [live, setLive] = useState<Record<string, LiveProgress>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  // Previous progress samples for speed estimation.
   const samples = useRef<Record<string, { downloaded: number; t: number; speed: number }>>({});
 
   const refresh = useCallback(async () => {
@@ -46,35 +29,33 @@ export default function App() {
     }
   }, []);
 
-  const flash = useCallback((msg: string) => {
-    setError(msg);
-  }, []);
+  const flash = useCallback((msg: string) => setError(msg), []);
 
-  // Initial load: default destination + existing tasks.
+  // Initial load: settings, pairing info, and existing tasks.
   useEffect(() => {
     (async () => {
-      if (!loadStoredDir()) {
-        try {
-          const dir = await api.defaultDir();
-          setDestDir(dir);
-          storeDir(dir);
-        } catch {
-          /* leave empty; user sets it in Settings */
-        }
+      try {
+        const s = await api.getSettings();
+        setDestDir(s.download_dir);
+        setConnections(s.connections);
+      } catch (e) {
+        flash(errorMessage(e));
+      }
+      try {
+        setBridge(await api.bridgeInfo());
+      } catch {
+        /* bridge optional */
       }
       await refresh();
     })();
-  }, [refresh]);
+  }, [refresh, flash]);
 
   // Event subscriptions.
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
     let active = true;
 
-    onDownloadsChanged(() => refresh()).then((u) => {
-      if (active) unlisteners.push(u);
-      else u();
-    });
+    onDownloadsChanged(() => refresh()).then((u) => (active ? unlisteners.push(u) : u()));
 
     onProgress((p) => {
       const now = Date.now();
@@ -82,18 +63,11 @@ export default function App() {
       let speed = prev?.speed ?? 0;
       if (prev && now > prev.t) {
         const inst = ((p.downloaded - prev.downloaded) * 1000) / (now - prev.t);
-        // Exponential smoothing keeps the number readable.
         speed = prev.speed > 0 ? prev.speed * 0.6 + inst * 0.4 : inst;
       }
       samples.current[p.id] = { downloaded: p.downloaded, t: now, speed };
-      setLive((cur) => ({
-        ...cur,
-        [p.id]: { downloaded: p.downloaded, total: p.total, speed },
-      }));
-    }).then((u) => {
-      if (active) unlisteners.push(u);
-      else u();
-    });
+      setLive((cur) => ({ ...cur, [p.id]: { downloaded: p.downloaded, total: p.total, speed } }));
+    }).then((u) => (active ? unlisteners.push(u) : u()));
 
     return () => {
       active = false;
@@ -101,7 +75,6 @@ export default function App() {
     };
   }, [refresh]);
 
-  // Auto-dismiss errors.
   useEffect(() => {
     if (!error) return;
     const t = setTimeout(() => setError(null), 6000);
@@ -117,7 +90,7 @@ export default function App() {
       }
       setBusy(true);
       try {
-        await api.add(url, destDir, filename);
+        await api.add(url, filename);
         await refresh();
       } catch (e) {
         flash(errorMessage(e));
@@ -138,6 +111,20 @@ export default function App() {
       }
     },
     [flash, refresh],
+  );
+
+  const saveSettings = useCallback(
+    async (dir: string, conns: number) => {
+      try {
+        await api.setSettings(dir, conns);
+        const s = await api.getSettings();
+        setDestDir(s.download_dir);
+        setConnections(s.connections);
+      } catch (e) {
+        flash(errorMessage(e));
+      }
+    },
+    [flash],
   );
 
   const visible = useMemo(() => tasks.filter((t) => matchesFilter(t, filter)), [tasks, filter]);
@@ -202,11 +189,10 @@ export default function App() {
 
       {showSettings && (
         <Settings
-          destDir={destDir}
-          onSave={(dir) => {
-            setDestDir(dir);
-            storeDir(dir);
-          }}
+          downloadDir={destDir}
+          connections={connections}
+          bridge={bridge}
+          onSave={saveSettings}
           onClose={() => setShowSettings(false)}
         />
       )}

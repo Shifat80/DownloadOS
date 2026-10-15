@@ -10,8 +10,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use downloados_lib::download_engine::range::probe;
-use downloados_lib::download_engine::segmented::{SegmentPlanConfig, download_segmented};
+use downloados_lib::download_engine::range::{plan_segments, probe};
+use downloados_lib::download_engine::segmented::{
+    SegmentPlanConfig, SegmentedOutcome, download_segmented, download_segments,
+};
 use downloados_lib::download_engine::single_stream::{self, StopState};
 use downloados_lib::download_engine::{CancelToken, NetPolicy, PauseToken};
 use downloados_lib::error::ErrorCode;
@@ -294,6 +296,69 @@ async fn segmented_rejects_bad_content_range() {
     .await
     .unwrap_err();
     assert_eq!(err.code, ErrorCode::RangeInvalid);
+}
+
+#[tokio::test]
+async fn segmented_resume_fills_remaining_segments() {
+    // Deterministic resume: download some segments, then the rest, and verify
+    // the assembled file is byte-identical with correct offsets.
+    let body = pattern(4096);
+    let base = start_server(body.clone());
+    let client = single_stream::build_client().unwrap();
+    let url = url::Url::parse(&format!("{base}/ranged")).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let temp = dir.path().join("out.part");
+
+    let plan = plan_segments(4096, 4, 256);
+    assert!(plan.len() >= 2);
+
+    // First pass: fetch only the first half of the segments.
+    let half = plan.len() / 2;
+    let first: Vec<usize> = (0..half).collect();
+    let out1 = download_segments(
+        &client,
+        &url,
+        test_policy(),
+        &temp,
+        4096,
+        &plan,
+        &first,
+        0,
+        None,
+        4,
+        &CancelToken::new(),
+        &PauseToken::new(),
+        |_idx| {},
+        |_p| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(out1, SegmentedOutcome::Completed);
+
+    // Second pass: fetch the remaining segments, with `already` bytes accounted.
+    let rest: Vec<usize> = (half..plan.len()).collect();
+    let already: u64 = plan[..half].iter().map(|s| s.byte_len()).sum();
+    let out2 = download_segments(
+        &client,
+        &url,
+        test_policy(),
+        &temp,
+        4096,
+        &plan,
+        &rest,
+        already,
+        None,
+        4,
+        &CancelToken::new(),
+        &PauseToken::new(),
+        |_idx| {},
+        |_p| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(out2, SegmentedOutcome::Completed);
+
+    assert_eq!(std::fs::read(&temp).unwrap(), body);
 }
 
 #[tokio::test]

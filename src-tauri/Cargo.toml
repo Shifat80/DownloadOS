@@ -37,6 +37,8 @@ uuid = { version = "1", features = ["v4"] }
 # Local task persistence. "bundled" compiles SQLite from source so there is no
 # system SQLite dependency to manage across platforms.
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Minimal HTTP server for the loopback browser-handoff bridge (127.0.0.1 only).
+tiny_http = "0.12"
 
 [dev-dependencies]
 # Minimal local HTTP server used only by integration tests (never shipped),

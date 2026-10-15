@@ -455,6 +455,29 @@ body {
   margin-top: 20px;
 }
 
+.pair-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0;
+}
+.pair-key {
+  min-width: 100px;
+  color: var(--text-muted);
+}
+.pair-val {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  background: var(--surface-2);
+  padding: 2px 8px;
+  border-radius: 6px;
+  word-break: break-all;
+  flex: 1;
+}
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
 @media (max-width: 560px) {
   .addbar-row {
     flex-wrap: wrap;

@@ -190,8 +190,8 @@ pub fn authorize(
     token_header: Option<&str>,
     expected_token: &str,
 ) -> Result<(), HandoffDenied> {
-    let origin = origin
-        .ok_or_else(|| HandoffDenied::new(403, "BAD_ORIGIN", "Missing Origin header."))?;
+    let origin =
+        origin.ok_or_else(|| HandoffDenied::new(403, "BAD_ORIGIN", "Missing Origin header."))?;
     if !ALLOWED_ORIGIN_PREFIXES
         .iter()
         .any(|p| origin.starts_with(p))
@@ -241,9 +241,12 @@ fn denied_body(code: &str, message: &str) -> serde_json::Value {
 
 fn json_response(status: u16, body: &serde_json::Value) -> Response<Cursor<Vec<u8>>> {
     let data = serde_json::to_vec(body).unwrap_or_default();
-    Response::from_data(data).with_status_code(status).with_header(
-        Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).expect("valid header"),
-    )
+    Response::from_data(data)
+        .with_status_code(status)
+        .with_header(
+            Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+                .expect("valid header"),
+        )
 }
 
 /// A simple fixed-window rate limiter (single-threaded request loop).
@@ -286,14 +289,7 @@ mod tests {
 
     #[test]
     fn authorize_accepts_extension_origin_and_token() {
-        assert!(
-            authorize(
-                Some("chrome-extension://abcdef"),
-                Some("secret"),
-                "secret"
-            )
-            .is_ok()
-        );
+        assert!(authorize(Some("chrome-extension://abcdef"), Some("secret"), "secret").is_ok());
     }
 
     #[test]
