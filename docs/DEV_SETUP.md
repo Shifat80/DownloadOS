@@ -136,6 +136,31 @@ The engine verifies byte-range support from a real ranged probe (never from
 Segmented per-segment checkpointing (resuming a partially-done segmented
 transfer) and status-aware retry of 429/503 are deferred to Phase 7.
 
+## Desktop UI and download manager (Phase 4)
+
+The React UI (`src/`) is wired to real backend commands — no mock data or
+synthetic progress:
+
+- `manager/` — owns control tokens for running transfers, runs each download on
+  a background task via the resumable single-stream engine, persists real byte
+  progress and lifecycle state, and emits events: `download:progress`
+  (throttled `{id, downloaded, total}`) and `downloads:changed` (refresh
+  signal). Speed/ETA are derived in the UI from real progress deltas.
+- Tauri commands: `add_download`, `pause_download`, `resume_download`,
+  `cancel_download`, `retry_download`, `remove_download`, `list_downloads`,
+  `get_download_details`, `default_download_dir`.
+- UI: dashboard with URL entry + optional filename, a destination folder shown
+  in the add bar and editable in Settings (persisted per-viewer in
+  localStorage), filter tabs (All/Active/Paused/Completed/Failed with counts),
+  per-task cards with a real progress bar, size, speed, ETA, and
+  pause/resume/cancel/retry/remove actions, plus accessible empty and error
+  states. Light/dark via `prefers-color-scheme`.
+
+Current manager scope: live downloads use the single-stream resumable path
+(supports pause/resume/cancel/retry end to end). Driving the segmented
+transfer through the live manager, a native folder picker, and auto-starting
+tasks recovered to `queued` after a crash are follow-ups.
+
 ## Security configuration notes
 
 - Tauri CSP is set (not `null`) in `src-tauri/tauri.conf.json`.

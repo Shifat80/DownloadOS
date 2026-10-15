@@ -291,7 +291,7 @@ fn destination_exists(dest: &Path) -> EngineError {
 }
 
 /// The deterministic partial-file path next to a known destination.
-fn part_path(dest: &Path) -> PathBuf {
+pub(crate) fn part_path(dest: &Path) -> PathBuf {
     let mut name = dest
         .file_name()
         .and_then(|n| n.to_str())
