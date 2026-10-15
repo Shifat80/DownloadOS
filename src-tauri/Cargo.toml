@@ -34,6 +34,9 @@ thiserror = "2"
 url = "2"
 # Stable task identifiers.
 uuid = { version = "1", features = ["v4"] }
+# Local task persistence. "bundled" compiles SQLite from source so there is no
+# system SQLite dependency to manage across platforms.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [dev-dependencies]
 # Minimal local HTTP server used only by integration tests (never shipped),

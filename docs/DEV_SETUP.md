@@ -97,6 +97,21 @@ Run `cargo` from PowerShell (not Git Bash). rustc's MSVC toolchain locates
 installed. Git Bash's coreutils `link` shadows the MSVC linker, so avoid it for
 builds.
 
+## Data storage (Phase 2)
+
+Task history is persisted in a local SQLite database at
+`<app_data_dir>/tasks.db` (created on first run; schema versioned via
+`PRAGMA user_version`). On startup the app recovers tasks that were in flight
+during an unclean shutdown back to the `queued` state; completed, failed,
+cancelled, and paused tasks are left as-is. The `source_url` is stored to
+enable resume and is treated as a secret (never logged); `display_url` holds
+the redacted form.
+
+Tauri commands exposed: `list_downloads`, `get_download_details`,
+`retry_download`, `cancel_download`, `remove_download`. Wiring a live transfer
+through the store (progress + state updates during a running download) is
+Phase 4 work.
+
 ## Security configuration notes
 
 - Tauri CSP is set (not `null`) in `src-tauri/tauri.conf.json`.
