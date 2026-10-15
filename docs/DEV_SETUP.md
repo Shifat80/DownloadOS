@@ -112,6 +112,30 @@ Tauri commands exposed: `list_downloads`, `get_download_details`,
 through the store (progress + state updates during a running download) is
 Phase 4 work.
 
+## Transfer strategies (Phase 3)
+
+The engine verifies byte-range support from a real ranged probe (never from
+`Accept-Ranges` alone):
+
+- `range.rs` — `Content-Range` parsing, resource validators (ETag/Last-Modified),
+  `probe()`, and segment planning.
+- `segmented.rs` — bounded parallel-range download: each segment's
+  `Content-Range` is validated against the request, validators are re-checked
+  (a resource that changes mid-download yields `RESOURCE_CHANGED`, never a
+  merged file), and bytes are written at the correct offset of a preallocated
+  temp file, then finalized atomically.
+- `orchestrator.rs` — `download_resource()` probes, uses segmented transfer
+  when ranges are verified and the resource is large enough, otherwise falls
+  back to a single stream; transient (network) failures retry with bounded
+  exponential backoff while permanent failures stop immediately.
+- `single_stream.rs::download_resumable` — resumes from a `.part` file via a
+  `Range` + `If-Range` request (a `200` answer discards the partial and
+  restarts, so old/new bytes are never merged); cooperative pause preserves the
+  partial, cancel removes it.
+
+Segmented per-segment checkpointing (resuming a partially-done segmented
+transfer) and status-aware retry of 429/503 are deferred to Phase 7.
+
 ## Security configuration notes
 
 - Tauri CSP is set (not `null`) in `src-tauri/tauri.conf.json`.

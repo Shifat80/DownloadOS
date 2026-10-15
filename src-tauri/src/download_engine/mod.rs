@@ -1,10 +1,15 @@
 //! The download engine.
 //!
-//! Phase 1 implements a single-stream HTTP/HTTPS download to a temporary file
-//! with atomic finalization, real byte progress, cancellation, and structured
-//! errors. Segmented transfers, pause/resume, and persistence arrive in later
-//! phases and must reuse these types.
+//! Single-stream (Phase 1) and segmented/range transfers with resume and
+//! bounded retries (Phase 3) share the networking, filesystem, and range
+//! helpers in the submodules below.
 
+pub mod fsutil;
+pub mod net;
+pub mod orchestrator;
+pub mod range;
+pub mod retry;
+pub mod segmented;
 pub mod single_stream;
 
 use std::path::PathBuf;
@@ -31,6 +36,28 @@ impl CancelToken {
     }
 
     pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// A cooperative pause flag shared with a running download.
+///
+/// Unlike [`CancelToken`], pausing preserves the partial file so the transfer
+/// can later resume from where it stopped.
+#[derive(Clone, Default)]
+pub struct PauseToken(Arc<AtomicBool>);
+
+impl PauseToken {
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    /// Request a pause. Idempotent.
+    pub fn pause(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_paused(&self) -> bool {
         self.0.load(Ordering::SeqCst)
     }
 }
